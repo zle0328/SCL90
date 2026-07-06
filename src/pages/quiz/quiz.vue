@@ -11,15 +11,38 @@ const currentAnswer = computed(() => quizStore.answers[current.value])
 const answered = computed(() => answeredCount())
 const progressPercent = computed(() => Math.round((answered.value / total) * 100))
 const isLast = computed(() => current.value === total - 1)
+const allAnswered = computed(() => answered.value === total)
+const primaryActionText = computed(() => {
+  if (allAnswered.value) return '提交并查看结果'
+  if (isLast.value) return '检查漏题'
+  return currentAnswer.value > 0 ? '下一未答' : '下一题'
+})
+const primaryActionType = computed(() => (allAnswered.value ? 'success' : 'primary'))
 
 function select(value: number) {
+  const selectedIndex = current.value
   quizStore.answers[current.value] = value
-  // 选择后短暂延迟自动跳到下一题(最后一题不跳)
-  if (!isLast.value) {
-    setTimeout(() => {
-      if (current.value < total - 1) current.value++
-    }, 220)
-  }
+
+  setTimeout(() => {
+    if (current.value !== selectedIndex) return
+
+    const nextUnanswered = findNextUnanswered(selectedIndex + 1)
+    if (nextUnanswered !== -1) {
+      current.value = nextUnanswered
+      return
+    }
+
+    const firstUnanswered = findFirstUnanswered()
+    if (firstUnanswered !== -1) {
+      current.value = firstUnanswered
+      return
+    }
+
+    uni.showToast({
+      title: '已全部作答,可以提交',
+      icon: 'none'
+    })
+  }, 220)
 }
 
 function prev() {
@@ -30,27 +53,78 @@ function next() {
   if (current.value < total - 1) current.value++
 }
 
+function primaryAction() {
+  if (allAnswered.value || isLast.value) {
+    goResult()
+    return
+  }
+
+  if (currentAnswer.value > 0) {
+    goNextUnanswered()
+    return
+  }
+
+  next()
+}
+
+function goNextUnanswered() {
+  const nextUnanswered = findNextUnanswered(current.value + 1)
+  if (nextUnanswered !== -1) {
+    current.value = nextUnanswered
+    return
+  }
+
+  const firstUnanswered = findFirstUnanswered()
+  if (firstUnanswered !== -1) {
+    current.value = firstUnanswered
+    return
+  }
+
+  goResult()
+}
+
 function goResult() {
   if (answered.value < total) {
-    const firstUnanswered = quizStore.answers.findIndex((v) => v === 0)
+    const unansweredIndexes = findUnansweredIndexes()
+    const firstUnanswered = unansweredIndexes[0]
     uni.showModal({
       title: '还有题目未作答',
-      content: `尚有 ${total - answered.value} 题未作答,是否跳转到第 ${
-        firstUnanswered + 1
-      } 题继续?`,
+      content: `尚有 ${unansweredIndexes.length} 题未作答:${formatQuestionList(
+        unansweredIndexes
+      )}。是否跳转到第 ${firstUnanswered + 1} 题继续?`,
       confirmText: '去作答',
-      cancelText: '仍然提交',
+      cancelText: '取消',
       success: (res) => {
         if (res.confirm) {
           current.value = firstUnanswered
-        } else {
-          uni.redirectTo({ url: '/pages/result/result' })
         }
       }
     })
     return
   }
   uni.redirectTo({ url: '/pages/result/result' })
+}
+
+function findUnansweredIndexes(): number[] {
+  return quizStore.answers
+    .map((answer, index) => (answer === 0 ? index : -1))
+    .filter((index) => index !== -1)
+}
+
+function findFirstUnanswered(): number {
+  return quizStore.answers.findIndex((answer) => answer === 0)
+}
+
+function findNextUnanswered(start: number): number {
+  return quizStore.answers.findIndex((answer, index) => index >= start && answer === 0)
+}
+
+function formatQuestionList(indexes: number[]): string {
+  const visible = indexes.slice(0, 12).map((index) => `第 ${index + 1} 题`)
+  if (indexes.length > visible.length) {
+    visible.push(`等 ${indexes.length} 题`)
+  }
+  return visible.join('、')
 }
 
 function back() {
@@ -113,24 +187,13 @@ function back() {
         上一题
       </wd-button>
       <wd-button
-        v-if="!isLast"
-        type="primary"
+        :type="primaryActionType"
         size="large"
         :round="true"
         custom-class="btn-next"
-        @click="next"
+        @click="primaryAction"
       >
-        下一题
-      </wd-button>
-      <wd-button
-        v-else
-        type="success"
-        size="large"
-        :round="true"
-        custom-class="btn-next"
-        @click="goResult"
-      >
-        提交并查看结果
+        {{ primaryActionText }}
       </wd-button>
     </view>
   </view>
