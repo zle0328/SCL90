@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import * as echarts from 'echarts'
-import html2canvas from 'html2canvas'
-import jsPDF from 'jspdf'
+import type { ECharts } from 'echarts'
 import { quizStore, resetQuiz } from '@/store/quiz'
 import {
   calcResult,
@@ -17,7 +15,8 @@ import {
 const result = ref<Scl90Result | null>(null)
 const conclusion = ref('')
 const exporting = ref(false)
-let radarChart: echarts.ECharts | null = null
+let radarChart: ECharts | null = null
+let echartsLoader: Promise<typeof import('echarts')> | null = null
 
 const FACTOR_DISPLAY_NAME: Record<string, string> = {
   somatization: '躯体化',
@@ -56,8 +55,10 @@ onLoad(() => {
   conclusion.value = overallConclusion(r)
 
   nextTick(() => {
-    renderRadar()
     window.addEventListener('resize', resizeRadar)
+    setTimeout(() => {
+      void renderRadar()
+    }, 120)
   })
 })
 
@@ -72,9 +73,12 @@ function barPercent(average: number): number {
   return Math.min(100, Math.max(0, ((average - 1) / 4) * 100))
 }
 
-function renderRadar() {
+async function renderRadar() {
   const el = document.getElementById('factor-radar')
   if (!el || !result.value) return
+
+  const echarts = await loadEcharts()
+  if (!document.body.contains(el) || !result.value) return
 
   if (!radarChart) {
     radarChart = echarts.init(el)
@@ -140,6 +144,13 @@ function resizeRadar() {
   radarChart?.resize()
 }
 
+function loadEcharts(): Promise<typeof import('echarts')> {
+  if (!echartsLoader) {
+    echartsLoader = import('echarts')
+  }
+  return echartsLoader
+}
+
 async function exportPdf() {
   if (exporting.value) return
 
@@ -157,6 +168,11 @@ async function exportPdf() {
 
   try {
     await nextTick()
+    const [{ default: html2canvas }, jsPdfModule] = await Promise.all([
+      import('html2canvas'),
+      import('jspdf')
+    ])
+    const JsPDF = jsPdfModule.default || jsPdfModule.jsPDF
 
     const canvas = await html2canvas(reportEl, {
       scale: Math.min(2, window.devicePixelRatio || 2),
@@ -166,7 +182,7 @@ async function exportPdf() {
       windowHeight: reportEl.scrollHeight
     })
     const imageData = canvas.toDataURL('image/png')
-    const pdf = new jsPDF('p', 'mm', 'a4')
+    const pdf = new JsPDF('p', 'mm', 'a4')
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
     const imageHeight = (canvas.height * pageWidth) / canvas.width
@@ -234,8 +250,7 @@ function buildClinicalReportHtml(report: Scl90Result, reportConclusion: string):
     <style>
       .clinical-sheet {
         width: 794px;
-        min-height: 1123px;
-        padding: 38px 52px 42px;
+        padding: 28px 44px 24px;
         background: #fff;
         color: #222;
         font-family: "SimSun", "Songti SC", "Microsoft YaHei", Arial, sans-serif;
@@ -244,73 +259,48 @@ function buildClinicalReportHtml(report: Scl90Result, reportConclusion: string):
 
       .clinical-title {
         text-align: center;
-        font-size: 26px;
+        font-size: 24px;
         font-weight: 700;
         letter-spacing: 2px;
-        margin: 0 0 22px;
+        margin: 0 0 12px;
       }
 
       .clinical-subtitle {
         text-align: center;
-        font-size: 14px;
+        font-size: 12px;
         color: #555;
-        margin-bottom: 18px;
+        margin-bottom: 12px;
       }
 
       .clinical-info {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 8px 24px;
-        font-size: 13px;
-        line-height: 1.6;
-        padding: 0 4px 14px;
-        border-bottom: 2px solid #333;
-      }
-
-      .clinical-summary {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 10px;
-        margin: 16px 0 12px;
-      }
-
-      .clinical-metric {
-        border: 1px solid #d8d8d8;
-        padding: 9px 10px;
-        text-align: center;
-      }
-
-      .clinical-metric strong {
-        display: block;
-        font-size: 20px;
-        line-height: 1.2;
-        margin-bottom: 4px;
-      }
-
-      .clinical-metric span {
+        gap: 5px 22px;
         font-size: 12px;
-        color: #555;
+        line-height: 1.45;
+        padding: 0 4px 10px;
+        border-bottom: 2px solid #333;
       }
 
       .clinical-table {
         width: 100%;
         border-collapse: collapse;
-        margin-top: 12px;
-        font-size: 13px;
-        line-height: 1.45;
+        margin-top: 10px;
+        font-size: 12px;
+        line-height: 1.28;
       }
 
       .clinical-table th {
         font-weight: 700;
         text-align: center;
         border-bottom: 1.5px solid #333;
-        padding: 6px 8px;
+        padding: 4px 6px;
       }
 
       .clinical-table td {
         text-align: center;
         border-bottom: 1px solid #d7d7d7;
-        padding: 5px 8px;
+        padding: 3px 6px;
       }
 
       .clinical-table th:first-child,
@@ -320,36 +310,36 @@ function buildClinicalReportHtml(report: Scl90Result, reportConclusion: string):
 
       .clinical-section-title {
         text-align: center;
-        font-size: 18px;
+        font-size: 16px;
         font-weight: 700;
-        margin: 22px 0 8px;
+        margin: 14px 0 6px;
       }
 
       .clinical-chart {
         margin-top: 4px;
         border-top: 1.5px solid #333;
         border-bottom: 1.5px solid #333;
-        padding: 10px 0 4px;
+        padding: 6px 0 2px;
       }
 
       .clinical-result {
-        margin-top: 18px;
+        margin-top: 12px;
         border-top: 2px solid #333;
-        padding-top: 12px;
-        font-size: 13px;
-        line-height: 1.8;
+        padding-top: 9px;
+        font-size: 12px;
+        line-height: 1.55;
       }
 
       .clinical-result strong {
         display: block;
-        font-size: 16px;
-        margin-bottom: 5px;
+        font-size: 14px;
+        margin-bottom: 4px;
       }
 
       .clinical-note {
-        margin-top: 8px;
+        margin-top: 5px;
         color: #666;
-        font-size: 12px;
+        font-size: 11px;
       }
     </style>
     <div class="clinical-sheet">
@@ -366,13 +356,6 @@ function buildClinicalReportHtml(report: Scl90Result, reportConclusion: string):
         <div>婚姻：--</div>
         <div>职业：--</div>
         <div>测试耗时：--</div>
-      </div>
-
-      <div class="clinical-summary">
-        <div class="clinical-metric"><strong>${report.totalScore}</strong><span>总分</span></div>
-        <div class="clinical-metric"><strong>${displayScore(report.gsi)}</strong><span>总均分</span></div>
-        <div class="clinical-metric"><strong>${report.positiveCount}</strong><span>阳性项目数</span></div>
-        <div class="clinical-metric"><strong>${displayScore(report.psdi)}</strong><span>阳性症状均分</span></div>
       </div>
 
       <table class="clinical-table">
@@ -409,11 +392,11 @@ function buildClinicalReportHtml(report: Scl90Result, reportConclusion: string):
 
 function buildLineChartSvg(factors: FactorResult[]): string {
   const width = 690
-  const height = 326
+  const height = 250
   const left = 58
-  const top = 18
+  const top = 10
   const right = 18
-  const bottom = 84
+  const bottom = 64
   const chartWidth = width - left - right
   const chartHeight = height - top - bottom
   const xStep = chartWidth / (factors.length - 1)
@@ -441,9 +424,9 @@ function buildLineChartSvg(factors: FactorResult[]): string {
       `<tspan x="${p.x}" dy="${index === 0 ? 0 : 14}">${escapeHtml(label)}</tspan>`
     )).join('')
     return `
-      <text x="${p.x}" y="${top + chartHeight + 25}" text-anchor="middle" font-size="13">
+      <text x="${p.x}" y="${top + chartHeight + 20}" text-anchor="middle" font-size="12">
         ${labelText}
-        <tspan x="${p.x}" dy="16">${displayScore(p.factor.average)}</tspan>
+        <tspan x="${p.x}" dy="14">${displayScore(p.factor.average)}</tspan>
       </text>
     `
   }).join('')
@@ -456,7 +439,7 @@ function buildLineChartSvg(factors: FactorResult[]): string {
       <rect x="${left}" y="${top}" width="${chartWidth}" height="${chartHeight}" fill="#fff" stroke="#333" stroke-width="1.4" />
       ${horizontalLines}
       ${verticalLines}
-      <polyline points="${linePoints}" fill="none" stroke="#222" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" />
+      <polyline points="${linePoints}" fill="none" stroke="#222" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" />
       ${dots}
       ${labels}
     </svg>
