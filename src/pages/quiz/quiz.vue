@@ -15,7 +15,7 @@ const allAnswered = computed(() => answered.value === total)
 const primaryActionText = computed(() => {
   if (allAnswered.value) return '提交并查看结果'
   if (isLast.value) return '检查漏题'
-  return currentAnswer.value > 0 ? '下一未答' : '下一题'
+  return '下一题'
 })
 const primaryActionType = computed(() => (allAnswered.value ? 'success' : 'primary'))
 
@@ -26,22 +26,17 @@ function select(value: number) {
   setTimeout(() => {
     if (current.value !== selectedIndex) return
 
-    const nextUnanswered = findNextUnanswered(selectedIndex + 1)
-    if (nextUnanswered !== -1) {
-      current.value = nextUnanswered
+    if (allAnswered.value) {
+      uni.showToast({
+        title: '已全部作答,可以提交',
+        icon: 'none'
+      })
       return
     }
 
-    const firstUnanswered = findFirstUnanswered()
-    if (firstUnanswered !== -1) {
-      current.value = firstUnanswered
-      return
+    if (selectedIndex < total - 1) {
+      current.value = selectedIndex + 1
     }
-
-    uni.showToast({
-      title: '已全部作答,可以提交',
-      icon: 'none'
-    })
   }, 220)
 }
 
@@ -59,28 +54,7 @@ function primaryAction() {
     return
   }
 
-  if (currentAnswer.value > 0) {
-    goNextUnanswered()
-    return
-  }
-
   next()
-}
-
-function goNextUnanswered() {
-  const nextUnanswered = findNextUnanswered(current.value + 1)
-  if (nextUnanswered !== -1) {
-    current.value = nextUnanswered
-    return
-  }
-
-  const firstUnanswered = findFirstUnanswered()
-  if (firstUnanswered !== -1) {
-    current.value = firstUnanswered
-    return
-  }
-
-  goResult()
 }
 
 function goResult() {
@@ -109,14 +83,6 @@ function findUnansweredIndexes(): number[] {
   return quizStore.answers
     .map((answer, index) => (answer === 0 ? index : -1))
     .filter((index) => index !== -1)
-}
-
-function findFirstUnanswered(): number {
-  return quizStore.answers.findIndex((answer) => answer === 0)
-}
-
-function findNextUnanswered(start: number): number {
-  return quizStore.answers.findIndex((answer, index) => index >= start && answer === 0)
 }
 
 function formatQuestionList(indexes: number[]): string {
