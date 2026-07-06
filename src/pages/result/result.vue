@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import type { ECharts } from 'echarts'
 import { quizStore, resetQuiz } from '@/store/quiz'
 import {
   calcResult,
@@ -15,8 +14,7 @@ import {
 const result = ref<Scl90Result | null>(null)
 const conclusion = ref('')
 const exporting = ref(false)
-let radarChart: ECharts | null = null
-let echartsLoader: Promise<typeof import('echarts')> | null = null
+const radarSvg = computed(() => (result.value ? buildRadarSvg(result.value.factors) : ''))
 
 const FACTOR_DISPLAY_NAME: Record<string, string> = {
   somatization: '躯体化',
@@ -53,102 +51,11 @@ onLoad(() => {
   const r = calcResult(quizStore.answers)
   result.value = r
   conclusion.value = overallConclusion(r)
-
-  nextTick(() => {
-    window.addEventListener('resize', resizeRadar)
-    setTimeout(() => {
-      void renderRadar()
-    }, 120)
-  })
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', resizeRadar)
-  radarChart?.dispose()
-  radarChart = null
 })
 
 function barPercent(average: number): number {
   // 因子均分范围 1-5,映射为 0-100%
   return Math.min(100, Math.max(0, ((average - 1) / 4) * 100))
-}
-
-async function renderRadar() {
-  const el = document.getElementById('factor-radar')
-  if (!el || !result.value) return
-
-  const echarts = await loadEcharts()
-  if (!document.body.contains(el) || !result.value) return
-
-  if (!radarChart) {
-    radarChart = echarts.init(el)
-  }
-
-  radarChart.setOption({
-    color: ['#4a63e7'],
-    tooltip: {
-      trigger: 'item'
-    },
-    radar: {
-      center: ['50%', '52%'],
-      radius: '62%',
-      splitNumber: 4,
-      indicator: result.value.factors.map((f) => ({
-        name: factorDisplayName(f),
-        max: 5
-      })),
-      axisName: {
-        color: '#606a7b',
-        fontSize: 12
-      },
-      axisLine: {
-        lineStyle: {
-          color: '#d9deea'
-        }
-      },
-      splitLine: {
-        lineStyle: {
-          color: '#d9deea'
-        }
-      },
-      splitArea: {
-        areaStyle: {
-          color: ['#ffffff', '#f6f8fd']
-        }
-      }
-    },
-    series: [
-      {
-        name: '因子均分',
-        type: 'radar',
-        symbol: 'circle',
-        symbolSize: 5,
-        data: [
-          {
-            value: result.value.factors.map((f) => f.average),
-            name: '因子均分',
-            areaStyle: {
-              color: 'rgba(74, 99, 231, 0.18)'
-            },
-            lineStyle: {
-              width: 2
-            }
-          }
-        ]
-      }
-    ]
-  })
-}
-
-function resizeRadar() {
-  radarChart?.resize()
-}
-
-function loadEcharts(): Promise<typeof import('echarts')> {
-  if (!echartsLoader) {
-    echartsLoader = import('echarts')
-  }
-  return echartsLoader
 }
 
 async function exportPdf() {
@@ -175,13 +82,13 @@ async function exportPdf() {
     const JsPDF = jsPdfModule.default || jsPdfModule.jsPDF
 
     const canvas = await html2canvas(reportEl, {
-      scale: Math.min(2, window.devicePixelRatio || 2),
+      scale: 1.25,
       useCORS: true,
       backgroundColor: '#ffffff',
       windowWidth: reportEl.scrollWidth,
       windowHeight: reportEl.scrollHeight
     })
-    const imageData = canvas.toDataURL('image/png')
+    const imageData = canvas.toDataURL('image/jpeg', 0.76)
     const pdf = new JsPDF('p', 'mm', 'a4')
     const pageWidth = pdf.internal.pageSize.getWidth()
     const pageHeight = pdf.internal.pageSize.getHeight()
@@ -190,13 +97,13 @@ async function exportPdf() {
     let position = 0
     let remainingHeight = imageHeight
 
-    pdf.addImage(imageData, 'PNG', 0, position, pageWidth, imageHeight)
+    pdf.addImage(imageData, 'JPEG', 0, position, pageWidth, imageHeight, undefined, 'FAST')
     remainingHeight -= pageHeight
 
     while (remainingHeight > 0) {
       position -= pageHeight
       pdf.addPage()
-      pdf.addImage(imageData, 'PNG', 0, position, pageWidth, imageHeight)
+      pdf.addImage(imageData, 'JPEG', 0, position, pageWidth, imageHeight, undefined, 'FAST')
       remainingHeight -= pageHeight
     }
 
@@ -390,6 +297,84 @@ function buildClinicalReportHtml(report: Scl90Result, reportConclusion: string):
   `
 }
 
+function buildRadarSvg(factors: FactorResult[]): string {
+  const width = 680
+  const height = 520
+  const centerX = width / 2
+  const centerY = 248
+  const radius = 150
+  const pointCount = factors.length
+  const angleStep = (Math.PI * 2) / pointCount
+  const startAngle = -Math.PI / 2
+
+  const pointAt = (index: number, valueRadius: number) => {
+    const angle = startAngle + index * angleStep
+    return {
+      x: centerX + Math.cos(angle) * valueRadius,
+      y: centerY + Math.sin(angle) * valueRadius
+    }
+  }
+  const polygonPoints = (valueRadius: number) =>
+    factors
+      .map((_, index) => {
+        const point = pointAt(index, valueRadius)
+        return `${point.x.toFixed(1)},${point.y.toFixed(1)}`
+      })
+      .join(' ')
+  const grid = [1, 2, 3, 4, 5]
+    .map((level) => {
+      const levelRadius = (radius / 5) * level
+      return `
+        <polygon points="${polygonPoints(levelRadius)}" fill="${level % 2 === 0 ? '#f8faff' : '#ffffff'}" stroke="#d9deea" stroke-width="1" />
+      `
+    })
+    .join('')
+  const axes = factors
+    .map((_, index) => {
+      const point = pointAt(index, radius)
+      return `<line x1="${centerX}" y1="${centerY}" x2="${point.x.toFixed(1)}" y2="${point.y.toFixed(1)}" stroke="#d9deea" stroke-width="1" />`
+    })
+    .join('')
+  const dataPoints = factors
+    .map((factor, index) => {
+      const point = pointAt(index, (radius / 5) * Math.min(5, Math.max(0, factor.average)))
+      return `${point.x.toFixed(1)},${point.y.toFixed(1)}`
+    })
+    .join(' ')
+  const dots = factors
+    .map((factor, index) => {
+      const point = pointAt(index, (radius / 5) * Math.min(5, Math.max(0, factor.average)))
+      return `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" fill="#4a63e7" />`
+    })
+    .join('')
+  const labels = factors
+    .map((factor, index) => {
+      const point = pointAt(index, radius + 34)
+      const name = escapeHtml(factorDisplayName(factor))
+      const value = displayScore(factor.average)
+      const anchor = Math.abs(point.x - centerX) < 12 ? 'middle' : point.x > centerX ? 'start' : 'end'
+      return `
+        <text x="${point.x.toFixed(1)}" y="${point.y.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" fill="#606a7b" font-size="20">
+          <tspan x="${point.x.toFixed(1)}">${name}</tspan>
+          <tspan x="${point.x.toFixed(1)}" dy="24" fill="#9aa3b2" font-size="17">${value}</tspan>
+        </text>
+      `
+    })
+    .join('')
+
+  return `
+    <svg style="display:block;width:100%;height:100%;" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="${width}" height="${height}" fill="#fff" />
+      ${grid}
+      ${axes}
+      <polygon points="${dataPoints}" fill="rgba(74,99,231,0.18)" stroke="#4a63e7" stroke-width="4" />
+      ${dots}
+      ${labels}
+      <text x="${centerX}" y="${centerY + radius + 82}" text-anchor="middle" fill="#9aa3b2" font-size="18">中心 0 分 · 外圈 5 分</text>
+    </svg>
+  `
+}
+
 function buildLineChartSvg(factors: FactorResult[]): string {
   const width = 690
   const height = 250
@@ -555,7 +540,7 @@ function backHome() {
       </view>
 
       <view class="radar-card">
-        <view id="factor-radar" class="radar-chart" />
+        <view class="radar-chart" v-html="radarSvg" />
       </view>
 
       <!-- 因子得分列表 -->
