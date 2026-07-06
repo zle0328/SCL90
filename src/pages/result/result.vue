@@ -10,6 +10,7 @@ import {
   overallConclusion,
   SEVERITY_TEXT,
   SEVERITY_COLOR,
+  type FactorResult,
   type Scl90Result
 } from '@/utils/score'
 
@@ -17,6 +18,37 @@ const result = ref<Scl90Result | null>(null)
 const conclusion = ref('')
 const exporting = ref(false)
 let radarChart: echarts.ECharts | null = null
+
+const FACTOR_DISPLAY_NAME: Record<string, string> = {
+  somatization: '躯体化',
+  obsessive: '强迫症状',
+  interpersonal: '人际关系敏感',
+  depression: '抑郁症状',
+  anxiety: '焦虑症状',
+  hostility: '敌对症状',
+  phobic: '恐怖症状',
+  paranoid: '偏执症状',
+  psychoticism: '精神病性',
+  other: '睡眠饮食'
+}
+
+const FACTOR_REPORT_NAME: Record<string, string> = {
+  ...FACTOR_DISPLAY_NAME,
+  other: '其他项目'
+}
+
+const FACTOR_REFERENCE: Record<string, string> = {
+  somatization: '1.37±0.48',
+  obsessive: '1.62±0.58',
+  interpersonal: '1.65±0.51',
+  depression: '1.50±0.59',
+  anxiety: '1.39±0.43',
+  hostility: '1.48±0.56',
+  phobic: '1.23±0.41',
+  paranoid: '1.43±0.57',
+  psychoticism: '1.29±0.42',
+  other: '-'
+}
 
 onLoad(() => {
   const r = calcResult(quizStore.answers)
@@ -58,7 +90,7 @@ function renderRadar() {
       radius: '62%',
       splitNumber: 4,
       indicator: result.value.factors.map((f) => ({
-        name: f.name === '其他(饮食睡眠)' ? '其他' : f.name,
+        name: factorDisplayName(f),
         max: 5
       })),
       axisName: {
@@ -111,8 +143,7 @@ function resizeRadar() {
 async function exportPdf() {
   if (exporting.value) return
 
-  const reportEl = document.getElementById('scl-report')
-  if (!reportEl) {
+  if (!result.value) {
     uni.showToast({
       title: '报告内容未加载',
       icon: 'none'
@@ -121,15 +152,18 @@ async function exportPdf() {
   }
 
   exporting.value = true
+  const reportEl = buildClinicalReportElement(result.value, conclusion.value)
+  document.body.appendChild(reportEl)
+
   try {
     await nextTick()
-    resizeRadar()
 
     const canvas = await html2canvas(reportEl, {
       scale: Math.min(2, window.devicePixelRatio || 2),
       useCORS: true,
-      backgroundColor: '#f5f7fa',
-      scrollY: -window.scrollY
+      backgroundColor: '#ffffff',
+      windowWidth: reportEl.scrollWidth,
+      windowHeight: reportEl.scrollHeight
     })
     const imageData = canvas.toDataURL('image/png')
     const pdf = new jsPDF('p', 'mm', 'a4')
@@ -150,7 +184,7 @@ async function exportPdf() {
       remainingHeight -= pageHeight
     }
 
-    pdf.save(`SCL-90测评报告-${formatDate(new Date())}.pdf`)
+    pdf.save(`SCL-90医院式结果单-${formatDate(new Date())}.pdf`)
     uni.showToast({
       title: 'PDF 已生成',
       icon: 'success'
@@ -162,8 +196,302 @@ async function exportPdf() {
       icon: 'none'
     })
   } finally {
+    reportEl.remove()
     exporting.value = false
   }
+}
+
+function buildClinicalReportElement(report: Scl90Result, reportConclusion: string): HTMLDivElement {
+  const el = document.createElement('div')
+  el.className = 'clinical-pdf-host'
+  el.style.position = 'fixed'
+  el.style.left = '-10000px'
+  el.style.top = '0'
+  el.style.width = '794px'
+  el.style.background = '#fff'
+  el.style.zIndex = '-1'
+  el.innerHTML = buildClinicalReportHtml(report, reportConclusion)
+  return el
+}
+
+function buildClinicalReportHtml(report: Scl90Result, reportConclusion: string): string {
+  const now = new Date()
+  const factorRows = report.factors
+    .map(
+      (f) => `
+        <tr>
+          <td>${escapeHtml(factorReportName(f))}</td>
+          <td>${f.total}</td>
+          <td>${displayScore(f.average)}</td>
+          <td>${escapeHtml(SEVERITY_TEXT[f.level])}</td>
+          <td>${escapeHtml(factorReference(f))}</td>
+        </tr>
+      `
+    )
+    .join('')
+
+  return `
+    <style>
+      .clinical-sheet {
+        width: 794px;
+        min-height: 1123px;
+        padding: 38px 52px 42px;
+        background: #fff;
+        color: #222;
+        font-family: "SimSun", "Songti SC", "Microsoft YaHei", Arial, sans-serif;
+        box-sizing: border-box;
+      }
+
+      .clinical-title {
+        text-align: center;
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        margin: 0 0 22px;
+      }
+
+      .clinical-subtitle {
+        text-align: center;
+        font-size: 14px;
+        color: #555;
+        margin-bottom: 18px;
+      }
+
+      .clinical-info {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px 24px;
+        font-size: 13px;
+        line-height: 1.6;
+        padding: 0 4px 14px;
+        border-bottom: 2px solid #333;
+      }
+
+      .clinical-summary {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        margin: 16px 0 12px;
+      }
+
+      .clinical-metric {
+        border: 1px solid #d8d8d8;
+        padding: 9px 10px;
+        text-align: center;
+      }
+
+      .clinical-metric strong {
+        display: block;
+        font-size: 20px;
+        line-height: 1.2;
+        margin-bottom: 4px;
+      }
+
+      .clinical-metric span {
+        font-size: 12px;
+        color: #555;
+      }
+
+      .clinical-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .clinical-table th {
+        font-weight: 700;
+        text-align: center;
+        border-bottom: 1.5px solid #333;
+        padding: 6px 8px;
+      }
+
+      .clinical-table td {
+        text-align: center;
+        border-bottom: 1px solid #d7d7d7;
+        padding: 5px 8px;
+      }
+
+      .clinical-table th:first-child,
+      .clinical-table td:first-child {
+        text-align: left;
+      }
+
+      .clinical-section-title {
+        text-align: center;
+        font-size: 18px;
+        font-weight: 700;
+        margin: 22px 0 8px;
+      }
+
+      .clinical-chart {
+        margin-top: 4px;
+        border-top: 1.5px solid #333;
+        border-bottom: 1.5px solid #333;
+        padding: 10px 0 4px;
+      }
+
+      .clinical-result {
+        margin-top: 18px;
+        border-top: 2px solid #333;
+        padding-top: 12px;
+        font-size: 13px;
+        line-height: 1.8;
+      }
+
+      .clinical-result strong {
+        display: block;
+        font-size: 16px;
+        margin-bottom: 5px;
+      }
+
+      .clinical-note {
+        margin-top: 8px;
+        color: #666;
+        font-size: 12px;
+      }
+    </style>
+    <div class="clinical-sheet">
+      <h1 class="clinical-title">SCL-90症状自评量表结果单</h1>
+      <div class="clinical-subtitle">测试结果仅供参考，不作诊断使用</div>
+
+      <div class="clinical-info">
+        <div>姓名：自测用户</div>
+        <div>性别：--</div>
+        <div>年龄：--</div>
+        <div>文化程度：--</div>
+        <div>科室：门诊</div>
+        <div>测试日期：${formatDisplayDate(now)}</div>
+        <div>婚姻：--</div>
+        <div>职业：--</div>
+        <div>测试耗时：--</div>
+      </div>
+
+      <div class="clinical-summary">
+        <div class="clinical-metric"><strong>${report.totalScore}</strong><span>总分</span></div>
+        <div class="clinical-metric"><strong>${displayScore(report.gsi)}</strong><span>总均分</span></div>
+        <div class="clinical-metric"><strong>${report.positiveCount}</strong><span>阳性项目数</span></div>
+        <div class="clinical-metric"><strong>${displayScore(report.psdi)}</strong><span>阳性症状均分</span></div>
+      </div>
+
+      <table class="clinical-table">
+        <thead>
+          <tr>
+            <th>项目</th>
+            <th>原始分</th>
+            <th>平均分</th>
+            <th>参考</th>
+            <th>均分±标准差</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>总分</td><td>${report.totalScore}</td><td></td><td></td><td>129.96±38.76</td></tr>
+          <tr><td>总均分</td><td></td><td>${displayScore(report.gsi)}</td><td></td><td>1.44±0.43</td></tr>
+          <tr><td>阴性项目数</td><td>${report.negativeCount}</td><td></td><td></td><td>65.08±18.33</td></tr>
+          <tr><td>阳性项目数</td><td>${report.positiveCount}</td><td></td><td></td><td>24.92±18.41</td></tr>
+          <tr><td>阳性项目平均分</td><td></td><td>${displayScore(report.psdi)}</td><td></td><td></td></tr>
+          ${factorRows}
+        </tbody>
+      </table>
+
+      <div class="clinical-section-title">90项症状清单</div>
+      <div class="clinical-chart">${buildLineChartSvg(report.factors)}</div>
+
+      <div class="clinical-result">
+        <strong>测评结果</strong>
+        ${escapeHtml(reportConclusion)}
+        <div class="clinical-note">说明：SCL-90 为症状自评筛查工具，分数越高提示对应维度主观困扰越明显；如结果提示异常或困扰持续，请咨询专业心理或精神科医生。</div>
+      </div>
+    </div>
+  `
+}
+
+function buildLineChartSvg(factors: FactorResult[]): string {
+  const width = 690
+  const height = 326
+  const left = 58
+  const top = 18
+  const right = 18
+  const bottom = 84
+  const chartWidth = width - left - right
+  const chartHeight = height - top - bottom
+  const xStep = chartWidth / (factors.length - 1)
+  const points = factors.map((f, index) => {
+    const x = left + index * xStep
+    const y = top + chartHeight - (Math.min(5, Math.max(0, f.average)) / 5) * chartHeight
+    return { x, y, factor: f }
+  })
+  const linePoints = points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+  const horizontalLines = Array.from({ length: 11 }, (_, index) => {
+    const value = 5 - index * 0.5
+    const y = top + index * (chartHeight / 10)
+    const isMajor = index % 2 === 0
+    return `
+      <line x1="${left}" y1="${y}" x2="${width - right}" y2="${y}" stroke="${isMajor ? '#333' : '#9a9a9a'}" stroke-width="${isMajor ? 1 : 0.7}" />
+      <text x="${left - 8}" y="${y + 4}" text-anchor="end" font-size="12">${value.toFixed(2)}</text>
+    `
+  }).join('')
+  const verticalLines = points.map((p) => (
+    `<line x1="${p.x}" y1="${top}" x2="${p.x}" y2="${top + chartHeight}" stroke="#333" stroke-width="1" />`
+  )).join('')
+  const labels = points.map((p) => {
+    const labels = splitChartLabel(factorReportName(p.factor))
+    const labelText = labels.map((label, index) => (
+      `<tspan x="${p.x}" dy="${index === 0 ? 0 : 14}">${escapeHtml(label)}</tspan>`
+    )).join('')
+    return `
+      <text x="${p.x}" y="${top + chartHeight + 25}" text-anchor="middle" font-size="13">
+        ${labelText}
+        <tspan x="${p.x}" dy="16">${displayScore(p.factor.average)}</tspan>
+      </text>
+    `
+  }).join('')
+  const dots = points.map((p) => (
+    `<circle cx="${p.x}" cy="${p.y}" r="3.2" fill="#222" />`
+  )).join('')
+
+  return `
+    <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
+      <rect x="${left}" y="${top}" width="${chartWidth}" height="${chartHeight}" fill="#fff" stroke="#333" stroke-width="1.4" />
+      ${horizontalLines}
+      ${verticalLines}
+      <polyline points="${linePoints}" fill="none" stroke="#222" stroke-width="4" stroke-linejoin="round" stroke-linecap="round" />
+      ${dots}
+      ${labels}
+    </svg>
+  `
+}
+
+function splitChartLabel(name: string): string[] {
+  if (name === '人际关系敏感') return ['人际关系', '敏感']
+  if (name.length > 4) return [name.slice(0, 4), name.slice(4)]
+  return [name]
+}
+
+function factorDisplayName(factor: FactorResult): string {
+  return FACTOR_DISPLAY_NAME[factor.key] || factor.name
+}
+
+function factorReportName(factor: FactorResult): string {
+  return FACTOR_REPORT_NAME[factor.key] || factor.name
+}
+
+function factorReference(factor: FactorResult): string {
+  return FACTOR_REFERENCE[factor.key] || '-'
+}
+
+function displayScore(score: number): string {
+  return score.toFixed(2)
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function formatDate(date: Date): string {
@@ -171,6 +499,13 @@ function formatDate(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}${month}${day}`
+}
+
+function formatDisplayDate(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function retest() {
@@ -240,18 +575,46 @@ function backHome() {
         <view id="factor-radar" class="radar-chart" />
       </view>
 
-      <!-- 因子明细 -->
+      <!-- 因子得分列表 -->
       <view class="section-title">
         <view class="dot" />
-        <text>各因子得分</text>
+        <text>各因子得分及测试情况</text>
         <text class="section-title__hint">均分 ≥ 2 提示该因子筛查阳性</text>
+      </view>
+
+      <view class="factor-table">
+        <view class="factor-table__row factor-table__head">
+          <text class="factor-table__cell factor-table__cell--name">因子名称</text>
+          <text class="factor-table__cell">总分</text>
+          <text class="factor-table__cell">平均分</text>
+          <text class="factor-table__cell factor-table__cell--status">测试情况</text>
+        </view>
+        <view v-for="f in result.factors" :key="f.key" class="factor-table__row">
+          <text class="factor-table__cell factor-table__cell--name">{{ factorDisplayName(f) }}</text>
+          <text class="factor-table__cell factor-table__score">{{ f.total }}</text>
+          <text class="factor-table__cell factor-table__score">{{ displayScore(f.average) }}</text>
+          <view class="factor-table__cell factor-table__cell--status">
+            <text
+              class="factor-table__badge"
+              :style="{ color: '#fff', background: SEVERITY_COLOR[f.level] }"
+            >
+              {{ SEVERITY_TEXT[f.level] }}
+            </text>
+          </view>
+        </view>
+      </view>
+
+      <!-- 因子解释 -->
+      <view class="section-title">
+        <view class="dot" />
+        <text>因子解释说明</text>
       </view>
 
       <view class="factors">
         <view v-for="f in result.factors" :key="f.key" class="factor">
           <view class="factor__head">
             <view class="factor__name-wrap">
-              <text class="factor__name">{{ f.name }}</text>
+              <text class="factor__name">{{ factorDisplayName(f) }}</text>
               <text
                 class="factor__level"
                 :style="{ color: SEVERITY_COLOR[f.level], background: SEVERITY_COLOR[f.level] + '1a' }"
@@ -442,6 +805,67 @@ function backHome() {
 .radar-chart {
   width: 100%;
   height: 620rpx;
+}
+
+.factor-table {
+  overflow: hidden;
+  background: #fff;
+  border-radius: 20rpx;
+  box-shadow: 0 8rpx 24rpx rgba(74, 99, 231, 0.05);
+
+  &__row {
+    display: grid;
+    grid-template-columns: 2.1fr 0.9fr 1fr 1.25fr;
+    min-height: 88rpx;
+    align-items: center;
+    border-bottom: 2rpx solid #eef0f5;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+  }
+
+  &__head {
+    min-height: 72rpx;
+    background: #f1f8ec;
+    font-weight: 600;
+  }
+
+  &__cell {
+    display: block;
+    min-width: 0;
+    padding: 0 10rpx;
+    font-size: 28rpx;
+    color: #253142;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  &__cell--name {
+    padding-left: 24rpx;
+    font-weight: 600;
+    text-align: left;
+  }
+
+  &__cell--status {
+    display: flex;
+    justify-content: center;
+  }
+
+  &__score {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__badge {
+    min-width: 72rpx;
+    padding: 8rpx 12rpx;
+    border-radius: 10rpx;
+    font-size: 24rpx;
+    font-weight: 600;
+    line-height: 1;
+    text-align: center;
+  }
 }
 
 .factors {
