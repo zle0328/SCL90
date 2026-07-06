@@ -1,0 +1,32 @@
+{
+  "name": "scl90-h5",
+  "version": "1.0.0",
+  "description": "SCL-90 症状自评量表 H5 测评应用 (uni-app + Vue3 + wot-design-uni)",
+  "scripts": {
+    "dev:h5": "uni",
+    "build:h5": "uni build",
+    "type-check": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-1000920260626810",
+    "@dcloudio/uni-components": "3.0.0-alpha-1000920260626810",
+    "@dcloudio/uni-h5": "3.0.0-alpha-1000920260626810",
+    "echarts": "^6.1.0",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "vue": "^3.5.39",
+    "wot-design-uni": "^1.14.0"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "^3.4.8",
+    "@dcloudio/uni-automator": "3.0.0-alpha-1000920260626810",
+    "@dcloudio/uni-cli-shared": "3.0.0-alpha-1000920260626810",
+    "@dcloudio/uni-stacktracey": "3.0.0-alpha-1000920260626810",
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-1000920260626810",
+    "@vue/runtime-core": "^3.5.39",
+    "sass": "^1.77.0",
+    "typescript": "^5.4.0",
+    "vite": "^8.1.0",
+    "vue-tsc": "^2.0.0"
+  }
+}

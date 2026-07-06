@@ -1,0 +1,37 @@
+{
+  "easycom": {
+    "autoscan": true,
+    "custom": {
+      "^wd-(.*)": "wot-design-uni/components/wd-$1/wd-$1.vue"
+    }
+  },
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "SCL-90 症状自评量表",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/quiz/quiz",
+      "style": {
+        "navigationBarTitleText": "答题",
+        "navigationStyle": "custom"
+      }
+    },
+    {
+      "path": "pages/result/result",
+      "style": {
+        "navigationBarTitleText": "测评结果",
+        "navigationStyle": "custom"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "SCL-90 症状自评量表",
+    "navigationBarBackgroundColor": "#F5F7FA",
+    "backgroundColor": "#F5F7FA"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "SCL-90 症状自评量表",
+  "appid": "",
+  "description": "SCL-90 心理症状自评测试",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "app-plus": {
+    "usingComponents": true,
+    "nvueStyleCompiler": "uni-app",
+    "compilerVersion": 3
+  },
+  "h5": {
+    "title": "SCL-90 症状自评量表",
+    "router": {
+      "mode": "hash",
+      "base": "./"
+    },
+    "async": {
+      "loading": "正在加载...",
+      "error": "加载失败,请重试"
+    }
+  },
+  "vueVersion": "3"
+}

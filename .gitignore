@@ -1,0 +1,8 @@
+node_modules/
+dist/
+unpackage/
+produceout/
+.claude/
+.DS_Store
+*.log
+.hbuilderx/
