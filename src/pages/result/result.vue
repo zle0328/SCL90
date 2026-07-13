@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { quizStore, resetQuiz } from '@/store/quiz'
 import {
@@ -7,45 +7,51 @@ import {
   overallConclusion,
   SEVERITY_TEXT,
   SEVERITY_COLOR,
-  type FactorResult,
   type Scl90Result
 } from '@/utils/score'
+import { barPercent, displayScore, factorDisplayName } from '@/utils/report'
+import { OVERALL_NORMS } from '@/data/norms'
+import { buildRadarSvg } from '@/utils/charts'
+import { exportClinicalPdf } from '@/utils/pdfReport'
 
 const result = ref<Scl90Result | null>(null)
 const conclusion = ref('')
 const exporting = ref(false)
+const showNormalFactors = ref(false)
 const radarSvg = computed(() => (result.value ? buildRadarSvg(result.value.factors) : ''))
-
-const FACTOR_DISPLAY_NAME: Record<string, string> = {
-  somatization: '躯体化',
-  obsessive: '强迫症状',
-  interpersonal: '人际关系敏感',
-  depression: '抑郁症状',
-  anxiety: '焦虑症状',
-  hostility: '敌对症状',
-  phobic: '恐怖症状',
-  paranoid: '偏执症状',
-  psychoticism: '精神病性',
-  other: '睡眠饮食'
-}
-
-const FACTOR_REPORT_NAME: Record<string, string> = {
-  ...FACTOR_DISPLAY_NAME,
-  other: '其他项目'
-}
-
-const FACTOR_REFERENCE: Record<string, string> = {
-  somatization: '1.37±0.48',
-  obsessive: '1.62±0.58',
-  interpersonal: '1.65±0.51',
-  depression: '1.50±0.59',
-  anxiety: '1.39±0.43',
-  hostility: '1.48±0.56',
-  phobic: '1.23±0.41',
-  paranoid: '1.43±0.57',
-  psychoticism: '1.29±0.42',
-  other: '-'
-}
+const positiveFactors = computed(() => {
+  if (!result.value) return []
+  return result.value.factors
+    .filter((f) => f.positive)
+    .slice()
+    .sort((a, b) => b.average - a.average)
+})
+const normalFactors = computed(() => {
+  if (!result.value) return []
+  return result.value.factors
+    .filter((f) => !f.positive)
+    .slice()
+    .sort((a, b) => b.average - a.average)
+})
+const positiveFactorCount = computed(
+  () => positiveFactors.value.filter((f) => f.key !== 'other').length
+)
+const heroSummary = computed(() => {
+  const r = result.value
+  if (!r) return ''
+  if (!r.overallPositive) return '总体处于正常范围'
+  const parts: string[] = []
+  if (r.positiveCount > 0) parts.push(`${r.positiveCount} 项阳性`)
+  if (positiveFactorCount.value > 0) parts.push(`${positiveFactorCount.value} 个因子偏高`)
+  return parts.join(' · ')
+})
+const heroTag = computed(() => {
+  const r = result.value
+  if (!r) return ''
+  if (!r.overallPositive) return '状态良好'
+  if (positiveFactorCount.value >= 3) return '建议咨询'
+  return '建议关注'
+})
 
 onLoad(() => {
   const r = calcResult(quizStore.answers)
@@ -53,427 +59,23 @@ onLoad(() => {
   conclusion.value = overallConclusion(r)
 })
 
-function barPercent(average: number): number {
-  // 因子均分范围 1-5,映射为 0-100%
-  return Math.min(100, Math.max(0, ((average - 1) / 4) * 100))
-}
-
 async function exportPdf() {
   if (exporting.value) return
-
   if (!result.value) {
-    uni.showToast({
-      title: '报告内容未加载',
-      icon: 'none'
-    })
+    uni.showToast({ title: '报告内容未加载', icon: 'none' })
     return
   }
 
   exporting.value = true
-  const reportEl = buildClinicalReportElement(result.value, conclusion.value)
-  document.body.appendChild(reportEl)
-
   try {
-    await nextTick()
-    const [{ default: html2canvas }, jsPdfModule] = await Promise.all([
-      import('html2canvas'),
-      import('jspdf')
-    ])
-    const JsPDF = jsPdfModule.default || jsPdfModule.jsPDF
-
-    const canvas = await html2canvas(reportEl, {
-      scale: 1.25,
-      useCORS: true,
-      backgroundColor: '#ffffff',
-      windowWidth: reportEl.scrollWidth,
-      windowHeight: reportEl.scrollHeight
-    })
-    const imageData = canvas.toDataURL('image/jpeg', 0.76)
-    const pdf = new JsPDF('p', 'mm', 'a4')
-    const pageWidth = pdf.internal.pageSize.getWidth()
-    const pageHeight = pdf.internal.pageSize.getHeight()
-    const imageHeight = (canvas.height * pageWidth) / canvas.width
-
-    let position = 0
-    let remainingHeight = imageHeight
-
-    pdf.addImage(imageData, 'JPEG', 0, position, pageWidth, imageHeight, undefined, 'FAST')
-    remainingHeight -= pageHeight
-
-    while (remainingHeight > 0) {
-      position -= pageHeight
-      pdf.addPage()
-      pdf.addImage(imageData, 'JPEG', 0, position, pageWidth, imageHeight, undefined, 'FAST')
-      remainingHeight -= pageHeight
-    }
-
-    pdf.save(`SCL-90医院式结果单-${formatDate(new Date())}.pdf`)
-    uni.showToast({
-      title: 'PDF 已生成',
-      icon: 'success'
-    })
+    await exportClinicalPdf(result.value, conclusion.value)
+    uni.showToast({ title: 'PDF 已生成', icon: 'success' })
   } catch (error) {
     console.error('PDF export failed:', error)
-    uni.showToast({
-      title: 'PDF 生成失败',
-      icon: 'none'
-    })
+    uni.showToast({ title: 'PDF 生成失败', icon: 'none' })
   } finally {
-    reportEl.remove()
     exporting.value = false
   }
-}
-
-function buildClinicalReportElement(report: Scl90Result, reportConclusion: string): HTMLDivElement {
-  const el = document.createElement('div')
-  el.className = 'clinical-pdf-host'
-  el.style.position = 'fixed'
-  el.style.left = '-10000px'
-  el.style.top = '0'
-  el.style.width = '794px'
-  el.style.background = '#fff'
-  el.style.zIndex = '-1'
-  el.innerHTML = buildClinicalReportHtml(report, reportConclusion)
-  return el
-}
-
-function buildClinicalReportHtml(report: Scl90Result, reportConclusion: string): string {
-  const now = new Date()
-  const factorRows = report.factors
-    .map(
-      (f) => `
-        <tr>
-          <td>${escapeHtml(factorReportName(f))}</td>
-          <td>${f.total}</td>
-          <td>${displayScore(f.average)}</td>
-          <td>${escapeHtml(SEVERITY_TEXT[f.level])}</td>
-          <td>${escapeHtml(factorReference(f))}</td>
-        </tr>
-      `
-    )
-    .join('')
-
-  return `
-    <style>
-      .clinical-sheet {
-        width: 794px;
-        padding: 28px 44px 24px;
-        background: #fff;
-        color: #222;
-        font-family: "SimSun", "Songti SC", "Microsoft YaHei", Arial, sans-serif;
-        box-sizing: border-box;
-      }
-
-      .clinical-title {
-        text-align: center;
-        font-size: 24px;
-        font-weight: 700;
-        letter-spacing: 2px;
-        margin: 0 0 12px;
-      }
-
-      .clinical-subtitle {
-        text-align: center;
-        font-size: 12px;
-        color: #555;
-        margin-bottom: 12px;
-      }
-
-      .clinical-info {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 5px 22px;
-        font-size: 12px;
-        line-height: 1.45;
-        padding: 0 4px 10px;
-        border-bottom: 2px solid #333;
-      }
-
-      .clinical-table {
-        width: 100%;
-        border-collapse: collapse;
-        margin-top: 10px;
-        font-size: 12px;
-        line-height: 1.28;
-      }
-
-      .clinical-table th {
-        font-weight: 700;
-        text-align: center;
-        border-bottom: 1.5px solid #333;
-        padding: 4px 6px;
-      }
-
-      .clinical-table td {
-        text-align: center;
-        border-bottom: 1px solid #d7d7d7;
-        padding: 3px 6px;
-      }
-
-      .clinical-table th:first-child,
-      .clinical-table td:first-child {
-        text-align: left;
-      }
-
-      .clinical-section-title {
-        text-align: center;
-        font-size: 16px;
-        font-weight: 700;
-        margin: 14px 0 6px;
-      }
-
-      .clinical-chart {
-        margin-top: 4px;
-        border-top: 1.5px solid #333;
-        border-bottom: 1.5px solid #333;
-        padding: 6px 0 2px;
-      }
-
-      .clinical-result {
-        margin-top: 12px;
-        border-top: 2px solid #333;
-        padding-top: 9px;
-        font-size: 12px;
-        line-height: 1.55;
-      }
-
-      .clinical-result strong {
-        display: block;
-        font-size: 14px;
-        margin-bottom: 4px;
-      }
-
-      .clinical-note {
-        margin-top: 5px;
-        color: #666;
-        font-size: 11px;
-      }
-    </style>
-    <div class="clinical-sheet">
-      <h1 class="clinical-title">SCL-90症状自评量表结果单</h1>
-      <div class="clinical-subtitle">测试结果仅供参考，不作诊断使用</div>
-
-      <div class="clinical-info">
-        <div>姓名：自测用户</div>
-        <div>性别：--</div>
-        <div>年龄：--</div>
-        <div>文化程度：--</div>
-        <div>科室：门诊</div>
-        <div>测试日期：${formatDisplayDate(now)}</div>
-        <div>婚姻：--</div>
-        <div>职业：--</div>
-        <div>测试耗时：--</div>
-      </div>
-
-      <table class="clinical-table">
-        <thead>
-          <tr>
-            <th>项目</th>
-            <th>原始分</th>
-            <th>平均分</th>
-            <th>参考</th>
-            <th>均分±标准差</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><td>总分</td><td>${report.totalScore}</td><td></td><td></td><td>129.96±38.76</td></tr>
-          <tr><td>总均分</td><td></td><td>${displayScore(report.gsi)}</td><td></td><td>1.44±0.43</td></tr>
-          <tr><td>阴性项目数</td><td>${report.negativeCount}</td><td></td><td></td><td>65.08±18.33</td></tr>
-          <tr><td>阳性项目数</td><td>${report.positiveCount}</td><td></td><td></td><td>24.92±18.41</td></tr>
-          <tr><td>阳性项目平均分</td><td></td><td>${displayScore(report.psdi)}</td><td></td><td></td></tr>
-          ${factorRows}
-        </tbody>
-      </table>
-
-      <div class="clinical-section-title">90项症状清单</div>
-      <div class="clinical-chart">${buildLineChartSvg(report.factors)}</div>
-
-      <div class="clinical-result">
-        <strong>测评结果</strong>
-        ${escapeHtml(reportConclusion)}
-        <div class="clinical-note">说明：SCL-90 为症状自评筛查工具，分数越高提示对应维度主观困扰越明显；如结果提示异常或困扰持续，请咨询专业心理或精神科医生。</div>
-      </div>
-    </div>
-  `
-}
-
-function buildRadarSvg(factors: FactorResult[]): string {
-  const width = 680
-  const height = 520
-  const centerX = width / 2
-  const centerY = 248
-  const radius = 150
-  const pointCount = factors.length
-  const angleStep = (Math.PI * 2) / pointCount
-  const startAngle = -Math.PI / 2
-
-  const pointAt = (index: number, valueRadius: number) => {
-    const angle = startAngle + index * angleStep
-    return {
-      x: centerX + Math.cos(angle) * valueRadius,
-      y: centerY + Math.sin(angle) * valueRadius
-    }
-  }
-  const polygonPoints = (valueRadius: number) =>
-    factors
-      .map((_, index) => {
-        const point = pointAt(index, valueRadius)
-        return `${point.x.toFixed(1)},${point.y.toFixed(1)}`
-      })
-      .join(' ')
-  const grid = [1, 2, 3, 4, 5]
-    .map((level) => {
-      const levelRadius = (radius / 5) * level
-      return `
-        <polygon points="${polygonPoints(levelRadius)}" fill="${level % 2 === 0 ? '#f8faff' : '#ffffff'}" stroke="#d9deea" stroke-width="1" />
-      `
-    })
-    .join('')
-  const axes = factors
-    .map((_, index) => {
-      const point = pointAt(index, radius)
-      return `<line x1="${centerX}" y1="${centerY}" x2="${point.x.toFixed(1)}" y2="${point.y.toFixed(1)}" stroke="#d9deea" stroke-width="1" />`
-    })
-    .join('')
-  const dataPoints = factors
-    .map((factor, index) => {
-      const point = pointAt(index, (radius / 5) * Math.min(5, Math.max(0, factor.average)))
-      return `${point.x.toFixed(1)},${point.y.toFixed(1)}`
-    })
-    .join(' ')
-  const dots = factors
-    .map((factor, index) => {
-      const point = pointAt(index, (radius / 5) * Math.min(5, Math.max(0, factor.average)))
-      return `<circle cx="${point.x.toFixed(1)}" cy="${point.y.toFixed(1)}" r="4" fill="#4a63e7" />`
-    })
-    .join('')
-  const labels = factors
-    .map((factor, index) => {
-      const point = pointAt(index, radius + 34)
-      const name = escapeHtml(factorDisplayName(factor))
-      const value = displayScore(factor.average)
-      const anchor = Math.abs(point.x - centerX) < 12 ? 'middle' : point.x > centerX ? 'start' : 'end'
-      return `
-        <text x="${point.x.toFixed(1)}" y="${point.y.toFixed(1)}" text-anchor="${anchor}" dominant-baseline="middle" fill="#606a7b" font-size="20">
-          <tspan x="${point.x.toFixed(1)}">${name}</tspan>
-          <tspan x="${point.x.toFixed(1)}" dy="24" fill="#9aa3b2" font-size="17">${value}</tspan>
-        </text>
-      `
-    })
-    .join('')
-
-  return `
-    <svg style="display:block;width:100%;height:100%;" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-      <rect x="0" y="0" width="${width}" height="${height}" fill="#fff" />
-      ${grid}
-      ${axes}
-      <polygon points="${dataPoints}" fill="rgba(74,99,231,0.18)" stroke="#4a63e7" stroke-width="4" />
-      ${dots}
-      ${labels}
-      <text x="${centerX}" y="${centerY + radius + 82}" text-anchor="middle" fill="#9aa3b2" font-size="18">中心 0 分 · 外圈 5 分</text>
-    </svg>
-  `
-}
-
-function buildLineChartSvg(factors: FactorResult[]): string {
-  const width = 690
-  const height = 250
-  const left = 58
-  const top = 10
-  const right = 18
-  const bottom = 64
-  const chartWidth = width - left - right
-  const chartHeight = height - top - bottom
-  const xStep = chartWidth / (factors.length - 1)
-  const points = factors.map((f, index) => {
-    const x = left + index * xStep
-    const y = top + chartHeight - (Math.min(5, Math.max(0, f.average)) / 5) * chartHeight
-    return { x, y, factor: f }
-  })
-  const linePoints = points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
-  const horizontalLines = Array.from({ length: 11 }, (_, index) => {
-    const value = 5 - index * 0.5
-    const y = top + index * (chartHeight / 10)
-    const isMajor = index % 2 === 0
-    return `
-      <line x1="${left}" y1="${y}" x2="${width - right}" y2="${y}" stroke="${isMajor ? '#333' : '#9a9a9a'}" stroke-width="${isMajor ? 1 : 0.7}" />
-      <text x="${left - 8}" y="${y + 4}" text-anchor="end" font-size="12">${value.toFixed(2)}</text>
-    `
-  }).join('')
-  const verticalLines = points.map((p) => (
-    `<line x1="${p.x}" y1="${top}" x2="${p.x}" y2="${top + chartHeight}" stroke="#333" stroke-width="1" />`
-  )).join('')
-  const labels = points.map((p) => {
-    const labels = splitChartLabel(factorReportName(p.factor))
-    const labelText = labels.map((label, index) => (
-      `<tspan x="${p.x}" dy="${index === 0 ? 0 : 14}">${escapeHtml(label)}</tspan>`
-    )).join('')
-    return `
-      <text x="${p.x}" y="${top + chartHeight + 20}" text-anchor="middle" font-size="12">
-        ${labelText}
-        <tspan x="${p.x}" dy="14">${displayScore(p.factor.average)}</tspan>
-      </text>
-    `
-  }).join('')
-  const dots = points.map((p) => (
-    `<circle cx="${p.x}" cy="${p.y}" r="3.2" fill="#222" />`
-  )).join('')
-
-  return `
-    <svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">
-      <rect x="${left}" y="${top}" width="${chartWidth}" height="${chartHeight}" fill="#fff" stroke="#333" stroke-width="1.4" />
-      ${horizontalLines}
-      ${verticalLines}
-      <polyline points="${linePoints}" fill="none" stroke="#222" stroke-width="3.2" stroke-linejoin="round" stroke-linecap="round" />
-      ${dots}
-      ${labels}
-    </svg>
-  `
-}
-
-function splitChartLabel(name: string): string[] {
-  if (name === '人际关系敏感') return ['人际关系', '敏感']
-  if (name.length > 4) return [name.slice(0, 4), name.slice(4)]
-  return [name]
-}
-
-function factorDisplayName(factor: FactorResult): string {
-  return FACTOR_DISPLAY_NAME[factor.key] || factor.name
-}
-
-function factorReportName(factor: FactorResult): string {
-  return FACTOR_REPORT_NAME[factor.key] || factor.name
-}
-
-function factorReference(factor: FactorResult): string {
-  return FACTOR_REFERENCE[factor.key] || '-'
-}
-
-function displayScore(score: number): string {
-  return score.toFixed(2)
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-function formatDate(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}${month}${day}`
-}
-
-function formatDisplayDate(date: Date): string {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
 }
 
 function retest() {
@@ -501,14 +103,13 @@ function backHome() {
       <view class="hero" :class="result.overallPositive ? 'hero--warn' : 'hero--ok'">
         <view class="hero__top">
           <text class="hero__title">测评结果</text>
-          <view class="hero__tag">
-            {{ result.overallPositive ? '建议关注' : '状态良好' }}
-          </view>
+          <view class="hero__tag">{{ heroTag }}</view>
         </view>
         <view class="hero__score">
           <text class="hero__score-num">{{ result.totalScore }}</text>
           <text class="hero__score-unit">总分</text>
         </view>
+        <text v-if="heroSummary" class="hero__summary">{{ heroSummary }}</text>
         <text class="hero__conclusion">{{ conclusion }}</text>
       </view>
 
@@ -517,18 +118,22 @@ function backHome() {
         <view class="metric">
           <text class="metric__value">{{ result.gsi }}</text>
           <text class="metric__label">总均分 GSI</text>
+          <text class="metric__ref">常模 {{ OVERALL_NORMS.gsi }}</text>
         </view>
         <view class="metric">
           <text class="metric__value">{{ result.positiveCount }}</text>
           <text class="metric__label">阳性项目数</text>
+          <text class="metric__ref">常模 {{ OVERALL_NORMS.positiveCount }}</text>
         </view>
         <view class="metric">
           <text class="metric__value">{{ result.negativeCount }}</text>
           <text class="metric__label">阴性项目数</text>
+          <text class="metric__ref">常模 {{ OVERALL_NORMS.negativeCount }}</text>
         </view>
         <view class="metric">
           <text class="metric__value">{{ result.psdi }}</text>
           <text class="metric__label">阳性症状均分</text>
+          <text class="metric__ref">范围 2–5 分</text>
         </view>
       </view>
 
@@ -558,7 +163,9 @@ function backHome() {
           <text class="factor-table__cell factor-table__cell--status">测试情况</text>
         </view>
         <view v-for="f in result.factors" :key="f.key" class="factor-table__row">
-          <text class="factor-table__cell factor-table__cell--name">{{ factorDisplayName(f) }}</text>
+          <text class="factor-table__cell factor-table__cell--name">{{
+            factorDisplayName(f)
+          }}</text>
           <text class="factor-table__cell factor-table__score">{{ f.total }}</text>
           <text class="factor-table__cell factor-table__score">{{ displayScore(f.average) }}</text>
           <view class="factor-table__cell factor-table__cell--status">
@@ -579,38 +186,99 @@ function backHome() {
       </view>
 
       <view class="factors">
-        <view v-for="f in result.factors" :key="f.key" class="factor">
-          <view class="factor__head">
-            <view class="factor__name-wrap">
-              <text class="factor__name">{{ factorDisplayName(f) }}</text>
-              <text
-                class="factor__level"
-                :style="{ color: SEVERITY_COLOR[f.level], background: SEVERITY_COLOR[f.level] + '1a' }"
-              >
-                {{ SEVERITY_TEXT[f.level] }}
+        <template v-if="positiveFactors.length">
+          <view v-for="f in positiveFactors" :key="f.key" class="factor">
+            <view class="factor__head">
+              <view class="factor__name-wrap">
+                <text class="factor__name">{{ factorDisplayName(f) }}</text>
+                <text
+                  class="factor__level"
+                  :style="{
+                    color: SEVERITY_COLOR[f.level],
+                    background: SEVERITY_COLOR[f.level] + '1a'
+                  }"
+                >
+                  {{ SEVERITY_TEXT[f.level] }}
+                </text>
+              </view>
+              <text class="factor__avg" :style="{ color: SEVERITY_COLOR[f.level] }">
+                {{ f.average }}
               </text>
             </view>
-            <text class="factor__avg" :style="{ color: SEVERITY_COLOR[f.level] }">
-              {{ f.average }}
-            </text>
+            <view class="factor__bar">
+              <view
+                class="factor__bar-fill"
+                :style="{
+                  width: barPercent(f.average) + '%',
+                  background: SEVERITY_COLOR[f.level]
+                }"
+              />
+            </view>
+            <view class="factor__foot">
+              <text class="factor__meta">总分 {{ f.total }} · {{ f.itemCount }} 题</text>
+              <text class="factor__flag" :style="{ color: SEVERITY_COLOR[f.level] }">
+                筛查阳性
+              </text>
+            </view>
+            <text class="factor__desc">{{ f.desc }}</text>
           </view>
-          <view class="factor__bar">
-            <view
-              class="factor__bar-fill"
-              :style="{
-                width: barPercent(f.average) + '%',
-                background: SEVERITY_COLOR[f.level]
-              }"
+        </template>
+
+        <view v-if="normalFactors.length" class="factors__toggle-wrap">
+          <view
+            class="factors__toggle"
+            role="button"
+            tabindex="0"
+            :aria-expanded="showNormalFactors ? 'true' : 'false'"
+            @click="showNormalFactors = !showNormalFactors"
+            @keydown.enter.prevent="showNormalFactors = !showNormalFactors"
+            @keydown.space.prevent="showNormalFactors = !showNormalFactors"
+          >
+            <text class="factors__toggle-text">
+              {{ showNormalFactors ? '收起' : '展开' }}正常范围因子({{ normalFactors.length }})
+            </text>
+            <wd-icon
+              :name="showNormalFactors ? 'arrow-up' : 'arrow-down'"
+              size="16px"
+              color="#4a63e7"
             />
           </view>
-          <view class="factor__foot">
-            <text class="factor__meta">总分 {{ f.total }} · {{ f.itemCount }} 题</text>
-            <text v-if="f.positive" class="factor__flag" :style="{ color: SEVERITY_COLOR[f.level] }">
-              筛查阳性
-            </text>
-          </view>
-          <text class="factor__desc">{{ f.desc }}</text>
         </view>
+
+        <template v-if="showNormalFactors">
+          <view v-for="f in normalFactors" :key="f.key" class="factor factor--muted">
+            <view class="factor__head">
+              <view class="factor__name-wrap">
+                <text class="factor__name">{{ factorDisplayName(f) }}</text>
+                <text
+                  class="factor__level"
+                  :style="{
+                    color: SEVERITY_COLOR[f.level],
+                    background: SEVERITY_COLOR[f.level] + '1a'
+                  }"
+                >
+                  {{ SEVERITY_TEXT[f.level] }}
+                </text>
+              </view>
+              <text class="factor__avg" :style="{ color: SEVERITY_COLOR[f.level] }">
+                {{ f.average }}
+              </text>
+            </view>
+            <view class="factor__bar">
+              <view
+                class="factor__bar-fill"
+                :style="{
+                  width: barPercent(f.average) + '%',
+                  background: SEVERITY_COLOR[f.level]
+                }"
+              />
+            </view>
+            <view class="factor__foot">
+              <text class="factor__meta">总分 {{ f.total }} · {{ f.itemCount }} 题</text>
+            </view>
+            <text class="factor__desc">{{ f.desc }}</text>
+          </view>
+        </template>
       </view>
 
       <view class="disclaimer">
@@ -627,10 +295,23 @@ function backHome() {
       <wd-button plain size="large" :round="true" custom-class="btn-action" @click="backHome">
         返回首页
       </wd-button>
-      <wd-button plain size="large" :round="true" custom-class="btn-action" :loading="exporting" @click="exportPdf">
+      <wd-button
+        plain
+        size="large"
+        :round="true"
+        custom-class="btn-action"
+        :loading="exporting"
+        @click="exportPdf"
+      >
         导出 PDF
       </wd-button>
-      <wd-button type="primary" size="large" :round="true" custom-class="btn-action" @click="retest">
+      <wd-button
+        type="primary"
+        size="large"
+        :round="true"
+        custom-class="btn-action"
+        @click="retest"
+      >
         重新测评
       </wd-button>
     </view>
@@ -660,8 +341,8 @@ function backHome() {
   }
 
   &--warn {
-    background: linear-gradient(135deg, #4a63e7, #6b82f0);
-    box-shadow: 0 12rpx 32rpx rgba(74, 99, 231, 0.25);
+    background: linear-gradient(135deg, #f59e0b, #fb923c);
+    box-shadow: 0 12rpx 32rpx rgba(245, 158, 11, 0.28);
   }
 
   &__top {
@@ -701,6 +382,15 @@ function backHome() {
     }
   }
 
+  &__summary {
+    display: block;
+    margin-bottom: 12rpx;
+    font-size: 26rpx;
+    font-weight: 600;
+    letter-spacing: 1rpx;
+    opacity: 0.95;
+  }
+
   &__conclusion {
     display: block;
     font-size: 26rpx;
@@ -734,8 +424,19 @@ function backHome() {
   &__label {
     margin-top: 10rpx;
     font-size: 20rpx;
-    color: #999;
+    color: #6b7280;
     text-align: center;
+  }
+
+  &__ref {
+    margin-top: 8rpx;
+    font-size: 18rpx;
+    color: #8a93a3;
+    text-align: center;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    transform: scale(0.92);
+    transform-origin: center top;
   }
 }
 
@@ -759,7 +460,7 @@ function backHome() {
     margin-left: auto;
     font-size: 22rpx;
     font-weight: 400;
-    color: #aaa;
+    color: #6b7280;
   }
 }
 
@@ -840,6 +541,31 @@ function backHome() {
   display: flex;
   flex-direction: column;
   gap: 20rpx;
+
+  &__toggle-wrap {
+    display: flex;
+    justify-content: center;
+    margin: 8rpx 0;
+  }
+
+  &__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10rpx;
+    padding: 16rpx 32rpx;
+    background: #eef1fd;
+    border-radius: 100rpx;
+
+    &:active {
+      opacity: 0.85;
+    }
+  }
+
+  &__toggle-text {
+    font-size: 26rpx;
+    font-weight: 600;
+    color: #4a63e7;
+  }
 }
 
 .factor {
@@ -847,6 +573,12 @@ function backHome() {
   border-radius: 20rpx;
   padding: 32rpx;
   box-shadow: 0 8rpx 24rpx rgba(74, 99, 231, 0.05);
+
+  &--muted {
+    background: #fafbfd;
+    box-shadow: none;
+    border: 2rpx solid #eef0f5;
+  }
 
   &__head {
     display: flex;
@@ -899,7 +631,7 @@ function backHome() {
 
   &__meta {
     font-size: 24rpx;
-    color: #999;
+    color: #6b7280;
   }
 
   &__flag {
@@ -914,7 +646,7 @@ function backHome() {
     border-top: 2rpx solid #f2f3f7;
     font-size: 24rpx;
     line-height: 1.7;
-    color: #888;
+    color: #565b66;
   }
 }
 
@@ -930,7 +662,7 @@ function backHome() {
     margin-left: 12rpx;
     font-size: 22rpx;
     line-height: 1.6;
-    color: #999;
+    color: #6b7280;
   }
 }
 

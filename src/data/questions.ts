@@ -103,10 +103,15 @@ export const QUESTIONS: Question[] = [
   { id: 90, text: '感到自己的脑子有毛病' }
 ]
 
+/** 五级评分值(1-5) */
+export type ScoreValue = 1 | 2 | 3 | 4 | 5
+/** 单题答案:0 表示未作答,1-5 为选项分值 */
+export type AnswerValue = 0 | ScoreValue
+
 /** 五级评分选项 */
 export interface ScoreOption {
   label: string
-  value: number
+  value: ScoreValue
 }
 
 export const SCORE_OPTIONS: ScoreOption[] = [

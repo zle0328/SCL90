@@ -1,10 +1,23 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { onLoad } from '@dcloudio/uni-app'
 import { QUESTIONS, SCORE_OPTIONS } from '@/data/questions'
-import { quizStore, answeredCount } from '@/store/quiz'
+import { quizStore, answeredCount, firstUnansweredIndex } from '@/store/quiz'
+import type { AnswerValue, ScoreValue } from '@/data/questions'
 
 const total = QUESTIONS.length
 const current = ref(0) // 当前题目索引 0-89
+const showNavigator = ref(false)
+
+onLoad(() => {
+  if (!quizStore.startedAt) {
+    quizStore.startedAt = Date.now()
+  }
+  const answered = answeredCount()
+  if (answered > 0 && answered < total) {
+    current.value = firstUnansweredIndex()
+  }
+})
 
 const currentQuestion = computed(() => QUESTIONS[current.value])
 const currentAnswer = computed(() => quizStore.answers[current.value])
@@ -18,8 +31,9 @@ const primaryActionText = computed(() => {
   return '下一题'
 })
 const primaryActionType = computed(() => (allAnswered.value ? 'success' : 'primary'))
+const unansweredCount = computed(() => total - answered.value)
 
-function select(value: number) {
+function select(value: ScoreValue) {
   const selectedIndex = current.value
   quizStore.answers[current.value] = value
 
@@ -53,23 +67,21 @@ function primaryAction() {
     goResult()
     return
   }
-
   next()
 }
 
 function goResult() {
   if (answered.value < total) {
-    const unansweredIndexes = findUnansweredIndexes()
-    const firstUnanswered = unansweredIndexes[0]
+    const firstUnanswered = quizStore.answers.findIndex((v: AnswerValue) => v === 0)
     uni.showModal({
       title: '还有题目未作答',
-      content: `尚有 ${unansweredIndexes.length} 题未作答:${formatQuestionList(
-        unansweredIndexes
-      )}。是否跳转到第 ${firstUnanswered + 1} 题继续?`,
-      confirmText: '去作答',
-      cancelText: '取消',
+      content: `尚有 ${unansweredCount.value} 题未作答,是否打开题号导航查看?`,
+      confirmText: '打开导航',
+      cancelText: '继续下一题',
       success: (res) => {
         if (res.confirm) {
+          showNavigator.value = true
+        } else if (firstUnanswered !== -1) {
           current.value = firstUnanswered
         }
       }
@@ -79,22 +91,54 @@ function goResult() {
   uni.redirectTo({ url: '/pages/result/result' })
 }
 
-function findUnansweredIndexes(): number[] {
-  return quizStore.answers
-    .map((answer, index) => (answer === 0 ? index : -1))
-    .filter((index) => index !== -1)
-}
-
-function formatQuestionList(indexes: number[]): string {
-  const visible = indexes.slice(0, 12).map((index) => `第 ${index + 1} 题`)
-  if (indexes.length > visible.length) {
-    visible.push(`等 ${indexes.length} 题`)
-  }
-  return visible.join('、')
-}
-
 function back() {
   uni.navigateBack()
+}
+
+function openNavigator() {
+  showNavigator.value = true
+}
+
+function closeNavigator() {
+  showNavigator.value = false
+}
+
+function jumpTo(index: number) {
+  current.value = index
+  showNavigator.value = false
+}
+
+function jumpToFirstUnanswered() {
+  const idx = quizStore.answers.findIndex((v: AnswerValue) => v === 0)
+  if (idx !== -1) {
+    current.value = idx
+  }
+  showNavigator.value = false
+}
+
+function onOptionKey(e: KeyboardEvent, value: ScoreValue, idx: number) {
+  const total = SCORE_OPTIONS.length
+  if (e.key === ' ' || e.key === 'Enter') {
+    e.preventDefault()
+    select(value)
+    return
+  }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+    e.preventDefault()
+    focusOption((idx + 1) % total)
+    return
+  }
+  if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+    e.preventDefault()
+    focusOption((idx - 1 + total) % total)
+  }
+}
+
+function focusOption(idx: number) {
+  const opt = SCORE_OPTIONS[idx]
+  if (!opt || typeof document === 'undefined') return
+  const el = document.getElementById(`opt-${opt.value}`)
+  if (el) el.focus()
 }
 </script>
 
@@ -103,13 +147,31 @@ function back() {
     <!-- 顶部导航 + 进度 -->
     <view class="topbar">
       <view class="topbar__row">
-        <view class="back-btn" @click="back">
+        <view
+          class="back-btn"
+          role="button"
+          tabindex="0"
+          aria-label="返回上一页"
+          @click="back"
+          @keydown.enter.prevent="back"
+          @keydown.space.prevent="back"
+        >
           <wd-icon name="arrow-left" size="20px" color="#333" />
         </view>
         <text class="topbar__count">
           <text class="cur">{{ current + 1 }}</text> / {{ total }}
         </text>
-        <view class="placeholder" />
+        <view
+          class="nav-btn"
+          role="button"
+          tabindex="0"
+          aria-label="打开题号导航"
+          @click="openNavigator"
+          @keydown.enter.prevent="openNavigator"
+          @keydown.space.prevent="openNavigator"
+        >
+          <wd-icon name="app" size="20px" color="#4a63e7" />
+        </view>
       </view>
       <view class="progress">
         <view class="progress__bar" :style="{ width: progressPercent + '%' }" />
@@ -124,13 +186,19 @@ function back() {
     </view>
 
     <!-- 选项 -->
-    <view class="options">
+    <view class="options" role="radiogroup" :aria-label="`第 ${current + 1} 题选项`">
       <view
-        v-for="opt in SCORE_OPTIONS"
+        v-for="(opt, idx) in SCORE_OPTIONS"
+        :id="`opt-${opt.value}`"
         :key="opt.value"
         class="option"
         :class="{ 'option--active': currentAnswer === opt.value }"
+        role="radio"
+        :aria-checked="currentAnswer === opt.value ? 'true' : 'false'"
+        :aria-label="`${opt.label},${opt.value} 分`"
+        :tabindex="currentAnswer === opt.value || (currentAnswer === 0 && idx === 0) ? 0 : -1"
         @click="select(opt.value)"
+        @keydown="onOptionKey($event, opt.value, idx)"
       >
         <view class="option__radio">
           <view v-if="currentAnswer === opt.value" class="option__radio-inner" />
@@ -162,6 +230,97 @@ function back() {
         {{ primaryActionText }}
       </wd-button>
     </view>
+
+    <!-- 题号导航抽屉 -->
+    <view
+      v-if="showNavigator"
+      class="navigator-mask"
+      role="dialog"
+      aria-modal="true"
+      aria-label="题号导航"
+      @click="closeNavigator"
+    >
+      <view class="navigator" @click.stop>
+        <view class="navigator__header">
+          <text class="navigator__title">题号导航</text>
+          <view
+            class="navigator__close"
+            role="button"
+            tabindex="0"
+            aria-label="关闭题号导航"
+            @click="closeNavigator"
+            @keydown.enter.prevent="closeNavigator"
+            @keydown.space.prevent="closeNavigator"
+          >
+            <wd-icon name="close" size="18px" color="#666" />
+          </view>
+        </view>
+        <view class="navigator__legend">
+          <view class="legend-item">
+            <view class="legend-dot legend-dot--current" />
+            <text>当前</text>
+          </view>
+          <view class="legend-item">
+            <view class="legend-dot legend-dot--answered" />
+            <text>已答</text>
+          </view>
+          <view class="legend-item">
+            <view class="legend-dot legend-dot--unanswered" />
+            <text>未答</text>
+          </view>
+          <text class="legend-summary">未答 {{ unansweredCount }} 题</text>
+        </view>
+        <scroll-view class="navigator__body" scroll-y>
+          <view class="grid" role="list" aria-label="题号列表">
+            <view
+              v-for="(ans, idx) in quizStore.answers"
+              :key="idx"
+              class="grid__cell"
+              :class="{
+                'grid__cell--current': idx === current,
+                'grid__cell--answered': ans > 0 && idx !== current,
+                'grid__cell--unanswered': ans === 0 && idx !== current
+              }"
+              role="button"
+              tabindex="0"
+              :aria-label="`第 ${idx + 1} 题${
+                idx === current ? ',当前题目' : ans > 0 ? ',已作答' : ',未作答'
+              }`"
+              :aria-current="idx === current ? 'true' : undefined"
+              @click="jumpTo(idx)"
+              @keydown.enter.prevent="jumpTo(idx)"
+              @keydown.space.prevent="jumpTo(idx)"
+            >
+              {{ idx + 1 }}
+            </view>
+          </view>
+        </scroll-view>
+        <view class="navigator__footer">
+          <wd-button
+            v-if="unansweredCount > 0"
+            plain
+            size="large"
+            block
+            :round="true"
+            custom-class="btn-nav-unans"
+            @click="jumpToFirstUnanswered"
+          >
+            跳到首个未答题
+          </wd-button>
+          <wd-button
+            v-else
+            type="success"
+            size="large"
+            block
+            :round="true"
+            custom-class="btn-nav-submit"
+            @click="goResult"
+          >
+            提交并查看结果
+          </wd-button>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -184,7 +343,7 @@ function back() {
 
   &__count {
     font-size: 30rpx;
-    color: #999;
+    color: #666;
 
     .cur {
       font-size: 40rpx;
@@ -195,15 +354,12 @@ function back() {
 }
 
 .back-btn,
-.placeholder {
+.nav-btn {
   width: 64rpx;
   height: 64rpx;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.back-btn {
   background: #fff;
   border-radius: 50%;
   box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.05);
@@ -227,7 +383,7 @@ function back() {
     display: block;
     margin-top: 12rpx;
     font-size: 22rpx;
-    color: #aaa;
+    color: #555;
     text-align: right;
   }
 }
@@ -310,11 +466,17 @@ function back() {
 
   &__score {
     font-size: 26rpx;
-    color: #bbb;
+    color: #555;
   }
 
   &--active &__score {
     color: #4a63e7;
+  }
+
+  &:focus,
+  &:focus-visible {
+    outline: 3rpx solid #4a63e7;
+    outline-offset: 2rpx;
   }
 }
 
@@ -334,6 +496,153 @@ function back() {
 
   :deep(.btn-next) {
     flex: 2;
+  }
+}
+
+/* 题号导航抽屉 */
+.navigator-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 999;
+  display: flex;
+  align-items: flex-end;
+}
+
+.navigator {
+  width: 100%;
+  max-height: 82vh;
+  background: #fff;
+  border-radius: 32rpx 32rpx 0 0;
+  padding: 32rpx 32rpx calc(24rpx + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  animation: slide-up 0.28s ease;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20rpx;
+  }
+
+  &__title {
+    font-size: 34rpx;
+    font-weight: 700;
+    color: #1a1a1a;
+  }
+
+  &__close {
+    width: 60rpx;
+    height: 60rpx;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: #f2f3f7;
+  }
+
+  &__legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 20rpx;
+    padding: 16rpx 8rpx;
+    margin-bottom: 12rpx;
+    border-bottom: 2rpx solid #f2f3f7;
+  }
+
+  &__body {
+    flex: 1;
+    max-height: 56vh;
+    overflow-y: auto;
+    padding: 12rpx 4rpx 20rpx;
+  }
+
+  &__footer {
+    padding-top: 20rpx;
+    border-top: 2rpx solid #f2f3f7;
+  }
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  font-size: 24rpx;
+  color: #666;
+}
+
+.legend-summary {
+  margin-left: auto;
+  font-size: 24rpx;
+  color: #e8534e;
+  font-weight: 600;
+}
+
+.legend-dot {
+  width: 24rpx;
+  height: 24rpx;
+  border-radius: 6rpx;
+  margin-right: 10rpx;
+
+  &--current {
+    background: #4a63e7;
+  }
+
+  &--answered {
+    background: #d7dcee;
+  }
+
+  &--unanswered {
+    background: #fff;
+    border: 2rpx solid #cfd4e6;
+  }
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16rpx;
+}
+
+.grid__cell {
+  height: 88rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  transition: transform 0.15s ease;
+
+  &:active {
+    transform: scale(0.94);
+  }
+
+  &--current {
+    background: #4a63e7;
+    color: #fff;
+    box-shadow: 0 4rpx 12rpx rgba(74, 99, 231, 0.35);
+  }
+
+  &--answered {
+    background: #eef1fd;
+    color: #4a63e7;
+  }
+
+  &--unanswered {
+    background: #fff;
+    color: #666;
+    border: 2rpx solid #d7dcee;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
   }
 }
 </style>
